@@ -359,7 +359,7 @@ module Resque
     def quit_excess_workers_for(queues)
       delta = -worker_delta_for(queues)
       pids_for(queues)[0...delta].each do |pid|
-        Process.kill("QUIT", pid)
+        Process.kill(GRACEFUL_QUIT_SIGNAL, pid)
       end
     end
 
