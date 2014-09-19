@@ -14,7 +14,7 @@ namespace :resque do
   desc "Launch a pool of resque workers"
   task :pool => %w[resque:preload resque:setup resque:pool:setup] do
     require 'resque/pool'
-    Resque::Pool.run
+    Resque::Pool.run(with_scheduler: (ENV['RESQUE_WITH_SCHEDULER'] != '0'))
   end
 
 end

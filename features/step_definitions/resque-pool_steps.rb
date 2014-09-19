@@ -9,7 +9,7 @@ end
 def grab_worker_pids(count, str)
   puts "TODO: check output_or_log for #{count} worker started messages"
   pid_regex = (1..count).map { '(\d+)' }.join ', '
-  full_regex = /resque-pool-manager\[aruba\]\[\d+\]: Pool contains worker PIDs: \[#{pid_regex}\]/m
+  full_regex = /resque-pool-manager\[aruba\]\[\d+\]: Pool contains PIDs: \[#{pid_regex}\]/m
   str.should =~ full_regex
   @worker_pids = full_regex.match(str).captures.map {|pid| pid.to_i }
 end
@@ -156,4 +156,4 @@ end
 Then /^the logfiles should match \/([^\/]*)\/$/ do |partial_output|
   output_or_log("log").should =~ /#{partial_output}/
 end
- 
+

@@ -22,10 +22,14 @@ module Resque
     extend  Logging
     attr_reader :config
     attr_reader :workers
+    attr_reader :has_scheduler
+    attr_reader :schedulers
 
-    def initialize(config)
+    def initialize(config, options = {})
       init_config(config)
+      @has_scheduler = (options[:with_scheduler] == true)
       @workers = Hash.new { |workers, queues| workers[queues] = {} }
+      @schedulers = {}
       procline "(initialized)"
     end
 
@@ -92,11 +96,11 @@ module Resque
       end
     end
 
-    def self.run
+    def self.run(options = {})
       if GC.respond_to?(:copy_on_write_friendly=)
         GC.copy_on_write_friendly = true
       end
-      Resque::Pool.new(choose_config_file).start.join
+      Resque::Pool.new(choose_config_file, options).start.join
     end
 
     # }}}
@@ -258,10 +262,10 @@ module Resque
     end
 
     def report_worker_pool_pids
-      if workers.empty?
+      if workers.empty? && schedulers.empty?
         log "Pool is empty"
       else
-        log "Pool contains worker PIDs: #{all_pids.inspect}"
+        log "Pool contains PIDs: #{all_pids.inspect}"
       end
     end
 
@@ -302,7 +306,11 @@ module Resque
           break unless wpid
 
           if worker = delete_worker(wpid)
-            log "Reaped resque worker[#{status.pid}] (status: #{status.exitstatus}) queues: #{worker.queues.join(",")}"
+            if worker.try(:queues)  # It is a worker (because it has queues)
+              log "Reaped resque worker[#{status.pid}] (status: #{status.exitstatus}) queues: #{worker.queues.join(",")}"
+            else  # It has no queues, so it is a scheduler
+              log "Reaped resque scheduler[#{status.pid}] (status: #{status.exitstatus})"
+            end
           else
             # this died before it could be killed, so it's not going to have any extra info
             log "Tried to reap worker [#{status.pid}], but it had already died. (status: #{status.exitstatus})"
@@ -315,14 +323,22 @@ module Resque
     # TODO: close any file descriptors connected to worker, if any
     def delete_worker(pid)
       worker = nil
+
+      # Try to delete the worker with given pid from subsequent queues
       workers.detect do |queues, pid_to_worker|
         worker = pid_to_worker.delete(pid)
       end
+
+      # If no worker found in queues, try deleting a scheduler
+      unless worker
+        worker = schedulers.delete(pid)
+      end
+
       worker
     end
 
     def all_pids
-      workers.map {|q,workers| workers.keys }.flatten
+      workers.map { |q,workers| workers.keys }.flatten + schedulers.keys
     end
 
     def signal_all_workers(signal)
@@ -339,6 +355,9 @@ module Resque
         delta = worker_delta_for(queues)
         spawn_missing_workers_for(queues) if delta > 0
         quit_excess_workers_for(queues)   if delta < 0
+      end
+      if has_scheduler && schedulers.empty?
+        spawn_scheduler!
       end
     end
 
@@ -396,6 +415,26 @@ module Resque
         worker.very_verbose = ENV['VVERBOSE']
       end
       worker
+    end
+
+    def spawn_scheduler!
+      scheduler_cli = create_scheduler
+      pid = fork do
+        Process.setpgrp unless Resque::Pool.single_process_group
+        log "Starting scheduler..."
+        call_after_prefork!
+        reset_sig_handlers!
+        scheduler_cli.run_forever
+      end
+      schedulers[pid] = scheduler_cli
+    end
+
+    def create_scheduler
+      scheduler_cli = Resque::Scheduler::Cli.new( %W(#{ENV['RESQUE_SCHEDULER_OPTIONS']}) )
+      scheduler_cli.parse_options
+      scheduler_cli.setup_env
+
+      scheduler_cli
     end
 
     # }}}

@@ -16,6 +16,7 @@ Gem::Specification.new do |s|
     saving memory (w/REE) and monitoring their uptime
   EOF
 
+  s.add_dependency "resque-scheduler", "~> 3.0.0"
   s.add_dependency "resque",  "~> 1.22"
   s.add_dependency "trollop", "~> 1.16"
   s.add_dependency "rake"
