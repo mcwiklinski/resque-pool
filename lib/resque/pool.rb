@@ -15,6 +15,9 @@ module Resque
     QUEUE_SIGS = [ :QUIT, :INT, :TERM, :USR1, :USR2, :CONT, :HUP, :WINCH, ]
     CHUNK_SIZE = (16 * 1024)
 
+    GRACEFUL_QUIT_SIGNAL = ENV['TERM_CHILD'] ? :TERM : :QUIT
+    IMMEDIATE_QUIT_SIGNAL = ENV['TERM_CHILD'] ? :QUIT : :TERM
+
     include Logging
     extend  Logging
     attr_reader :config
@@ -139,7 +142,6 @@ module Resque
 
     def self_pipe; @self_pipe ||= [] end
     def sig_queue; @sig_queue ||= [] end
-    def term_child; @term_child ||= ENV['TERM_CHILD'] end
 
 
     def init_self_pipe!
@@ -166,7 +168,7 @@ module Resque
     # defer a signal for later processing in #join (master process)
     def trap_deferred(signal)
       trap(signal) do |sig_nr|
-        if @waiting_for_reaper && [:INT, :TERM].include?(signal)
+        if @waiting_for_reaper && [:INT, IMMEDIATE_QUIT_SIGNAL].include?(signal)
           log "Recieved #{signal}: short circuiting QUIT waitpid"
           raise QuitNowException
         end
@@ -193,11 +195,7 @@ module Resque
         load_config
         Logging.reopen_logs!
         log "HUP: gracefully shutdown old children (which have old logfiles open)"
-        if term_child
-          signal_all_workers(:TERM)
-        else
-          signal_all_workers(:QUIT)
-        end
+        signal_all_workers(GRACEFUL_QUIT_SIGNAL)
         log "HUP: new children will inherit new logfiles"
         maintain_worker_count
       when :WINCH
@@ -206,26 +204,18 @@ module Resque
           @config = {}
           maintain_worker_count
         end
-      when :QUIT
-        if term_child
-          shutdown_everything_now!(signal)
-        else
-          graceful_worker_shutdown_and_wait!(signal)
-        end
+      when GRACEFUL_QUIT_SIGNAL
+        graceful_worker_shutdown_and_wait!(signal)
       when :INT
         graceful_worker_shutdown!(signal)
-      when :TERM
-        if term_child
+      when IMMEDIATE_QUIT_SIGNAL
+        case self.class.term_behavior
+        when "graceful_worker_shutdown_and_wait"
+          graceful_worker_shutdown_and_wait!(signal)
+        when "graceful_worker_shutdown"
           graceful_worker_shutdown!(signal)
         else
-          case self.class.term_behavior
-          when "graceful_worker_shutdown_and_wait"
-            graceful_worker_shutdown_and_wait!(signal)
-          when "graceful_worker_shutdown"
-            graceful_worker_shutdown!(signal)
-          else
-            shutdown_everything_now!(signal)
-          end
+          shutdown_everything_now!(signal)
         end
       end
     end
@@ -236,32 +226,20 @@ module Resque
 
     def graceful_worker_shutdown_and_wait!(signal)
       log "#{signal}: graceful shutdown, waiting for children"
-      if term_child
-        signal_all_workers(:TERM)
-      else
-        signal_all_workers(:QUIT)
-      end
+      signal_all_workers(GRACEFUL_QUIT_SIGNAL)
       reap_all_workers(0) # will hang until all workers are shutdown
       :break
     end
 
     def graceful_worker_shutdown!(signal)
       log "#{signal}: immediate shutdown (graceful worker shutdown)"
-      if term_child
-        signal_all_workers(:TERM)
-      else
-        signal_all_workers(:QUIT)
-      end
+      signal_all_workers(GRACEFUL_QUIT_SIGNAL)
       :break
     end
 
     def shutdown_everything_now!(signal)
       log "#{signal}: immediate shutdown (and immediate worker shutdown)"
-      if term_child
-        signal_all_workers(:QUIT)
-      else
-        signal_all_workers(:TERM)
-      end
+      signal_all_workers(IMMEDIATE_QUIT_SIGNAL)
       :break
     end
 
